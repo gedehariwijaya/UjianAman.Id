@@ -1,4 +1,4 @@
-import { ExamPayload, ProctorLog, StudentSession, DynamicMasterPin, EmergencyRecoveryToken } from '../types';
+import { ExamPayload, ProctorLog, StudentSession, DynamicMasterPin, EmergencyRecoveryToken, SavedExamItem } from '../types';
 
 export const DEFAULT_EXAM_CONFIG: ExamPayload = {
   exam_config: {
@@ -87,10 +87,169 @@ export function subscribeToSyncMessages(callback: (msg: SyncMessage) => void) {
 
 // LocalStorage helpers for persistence
 const STORAGE_CONFIG_KEY = 'ujianaman_active_config';
+const STORAGE_EXAM_LIST_KEY = 'ujianaman_saved_exams_list';
 const STORAGE_SESSIONS_KEY = 'ujianaman_student_sessions';
 const STORAGE_LOGS_KEY = 'ujianaman_proctor_logs';
 const STORAGE_DYNAMIC_PIN_KEY = 'ujianaman_dynamic_master_pin';
 const STORAGE_RECOVERY_TOKENS_KEY = 'ujianaman_recovery_tokens';
+
+export const DEFAULT_EXAM_LIST: SavedExamItem[] = [
+  {
+    id: 'exam_math_01',
+    name: 'Penilaian Akhir Semester - Matematika & Logika Terapan',
+    targetClass: 'Kelas XII - MIPA 1',
+    formUrl: 'https://docs.google.com/forms/d/e/1FAIpQLSc_EXAMPLE_MATH/viewform',
+    createdAt: Date.now() - 86400000 * 2,
+    payload: DEFAULT_EXAM_CONFIG
+  },
+  {
+    id: 'exam_physics_02',
+    name: 'Ujian Tengah Semester - Fisika Kuantum Dasar',
+    targetClass: 'Kelas XI - IPA',
+    formUrl: 'https://docs.google.com/forms/d/e/1FAIpQLSc_EXAMPLE_PHYSICS/viewform',
+    createdAt: Date.now() - 86400000,
+    payload: {
+      exam_config: {
+        exam_name: 'Ujian Tengah Semester - Fisika Kuantum Dasar',
+        target_class: 'Kelas XI - IPA',
+        form_source_url: 'https://docs.google.com/forms/d/e/1FAIpQLSc_EXAMPLE_PHYSICS/viewform',
+        security_rules: {
+          force_fullscreen: true,
+          block_tab_switch: true,
+          block_floating_apps: true,
+          max_allowed_violations: 2,
+          violation_penalty_seconds: 10,
+          action_on_exceed: 'LOCK_PERMANENTLY'
+        },
+        token_settings: {
+          expiration_datetime: '2026-09-08 14:00',
+          max_attempts: 1,
+          access_pin: 'FISIKA-2026'
+        }
+      }
+    }
+  },
+  {
+    id: 'exam_indo_03',
+    name: 'Asesmen Sumatif - Bahasa Indonesia & Literasi',
+    targetClass: 'Seluruh Kelas X',
+    formUrl: 'https://docs.google.com/forms/d/e/1FAIpQLSd_EXAMPLE_INDO/viewform',
+    createdAt: Date.now() - 3600000 * 5,
+    payload: {
+      exam_config: {
+        exam_name: 'Asesmen Sumatif - Bahasa Indonesia & Literasi',
+        target_class: 'Seluruh Kelas X',
+        form_source_url: 'https://docs.google.com/forms/d/e/1FAIpQLSd_EXAMPLE_INDO/viewform',
+        security_rules: {
+          force_fullscreen: true,
+          block_tab_switch: true,
+          block_floating_apps: true,
+          max_allowed_violations: 1,
+          violation_penalty_seconds: 10,
+          action_on_exceed: 'LOCK_PERMANENTLY'
+        },
+        token_settings: {
+          expiration_datetime: '2026-09-09 11:30',
+          max_attempts: 1,
+          access_pin: 'LITERASI-10'
+        }
+      }
+    }
+  }
+];
+
+export function getSavedExamList(): SavedExamItem[] {
+  if (typeof window === 'undefined') return DEFAULT_EXAM_LIST;
+  try {
+    const raw = localStorage.getItem(STORAGE_EXAM_LIST_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (e) {
+    console.error('Error loading exam list', e);
+  }
+  saveExamList(DEFAULT_EXAM_LIST);
+  return DEFAULT_EXAM_LIST;
+}
+
+export function saveExamList(list: SavedExamItem[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_EXAM_LIST_KEY, JSON.stringify(list));
+  } catch (e) {
+    console.error('Error saving exam list', e);
+  }
+}
+
+export function saveExamToList(payload: ExamPayload, existingId?: string): SavedExamItem {
+  const currentList = getSavedExamList();
+  const name = payload.exam_config.exam_name || 'Ujian Tanpa Judul';
+  const targetClass = payload.exam_config.target_class || 'Semua Kelas';
+  const formUrl = payload.exam_config.form_source_url || '';
+
+  let updatedItem: SavedExamItem;
+  let nextList: SavedExamItem[];
+
+  if (existingId) {
+    const idx = currentList.findIndex((item) => item.id === existingId);
+    if (idx >= 0) {
+      updatedItem = {
+        ...currentList[idx],
+        name,
+        targetClass,
+        formUrl,
+        payload
+      };
+      nextList = [...currentList];
+      nextList[idx] = updatedItem;
+    } else {
+      updatedItem = {
+        id: existingId,
+        name,
+        targetClass,
+        formUrl,
+        createdAt: Date.now(),
+        payload
+      };
+      nextList = [updatedItem, ...currentList];
+    }
+  } else {
+    const existingIdx = currentList.findIndex((item) => item.name.toLowerCase() === name.toLowerCase());
+    if (existingIdx >= 0) {
+      updatedItem = {
+        ...currentList[existingIdx],
+        name,
+        targetClass,
+        formUrl,
+        payload
+      };
+      nextList = [...currentList];
+      nextList[existingIdx] = updatedItem;
+    } else {
+      updatedItem = {
+        id: 'exam_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
+        name,
+        targetClass,
+        formUrl,
+        createdAt: Date.now(),
+        payload
+      };
+      nextList = [updatedItem, ...currentList];
+    }
+  }
+
+  saveExamList(nextList);
+  saveExamConfig(payload);
+  return updatedItem;
+}
+
+export function deleteExamFromList(id: string): SavedExamItem[] {
+  const currentList = getSavedExamList();
+  const filtered = currentList.filter((item) => item.id !== id);
+  saveExamList(filtered);
+  return filtered;
+}
 
 export function getSavedExamConfig(): ExamPayload {
   if (typeof window === 'undefined') return DEFAULT_EXAM_CONFIG;

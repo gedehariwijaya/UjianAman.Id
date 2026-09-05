@@ -795,13 +795,13 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
               <Users className="w-10 h-10 text-slate-600 mx-auto" />
               <p className="text-sm font-semibold text-slate-300">Belum Ada Siswa yang Terkoneksi</p>
               <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Buka tab <strong>Simulator Siswa</strong> untuk menguji satu sesi langsung, atau klik tombol <strong>"Simulasi 12 Siswa"</strong> di atas.
+                Buka tab <strong>Asesmen Siswa</strong> untuk menguji satu sesi langsung, atau klik tombol <strong>"Simulasi 12 Siswa"</strong> di atas.
               </p>
               <button
                 onClick={onOpenPlayer}
                 className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold mt-2"
               >
-                Buka Simulator Siswa
+                Buka Asesmen Siswa
               </button>
             </div>
           ) : (
@@ -830,7 +830,7 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
                           {student.studentName}
                         </h3>
                         <p className="text-xs text-slate-400 font-mono mt-0.5">
-                          NIS: {student.studentNis}
+                          {student.studentClass ? `${student.studentClass} • ` : ''}Absen: {student.studentAbsen || student.studentNis}
                         </p>
                       </div>
 

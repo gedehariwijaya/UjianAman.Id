@@ -23,16 +23,18 @@ import {
   Sparkles,
   HelpCircle,
   AlertTriangle,
-  ArrowRight
+  ArrowRight,
+  FileText
 } from 'lucide-react';
-import { ExamPayload, StudentSession, StudentViolationRecord, ProctorLog, EmergencyRecoveryToken } from '../types';
+import { ExamPayload, StudentSession, StudentViolationRecord, ProctorLog, EmergencyRecoveryToken, SavedExamItem } from '../types';
 import { playWarningBeep, playBlockAlarm, playChimeAlert } from '../utils/audioAlerts';
 import { 
   broadcastMessage, 
   subscribeToSyncMessages, 
   validateMasterPin, 
   validateAndRedeemRecoveryToken,
-  getDynamicMasterPin
+  getDynamicMasterPin,
+  getSavedExamList
 } from '../utils/proctorSync';
 
 interface SecurePlayerProps {
@@ -41,13 +43,60 @@ interface SecurePlayerProps {
 }
 
 export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer }) => {
-  const currentExam = config.exam_config;
+  const [availableExams, setAvailableExams] = useState<SavedExamItem[]>(() => getSavedExamList());
+  const [activeConfig, setActiveConfig] = useState<ExamPayload>(config);
+  const [selectedExamId, setSelectedExamId] = useState<string>(() => {
+    const list = getSavedExamList();
+    const match = list.find((e) => e.name === config.exam_config.exam_name);
+    return match ? match.id : (list[0]?.id || 'default');
+  });
+
+  const currentExam = activeConfig.exam_config;
   const security = currentExam.security_rules;
 
+  // Sync when prop config changes
+  useEffect(() => {
+    setActiveConfig(config);
+    const list = getSavedExamList();
+    const match = list.find((e) => e.name === config.exam_config.exam_name);
+    if (match) setSelectedExamId(match.id);
+  }, [config]);
+
+  // Keep available exams updated in real-time
+  useEffect(() => {
+    const updateList = () => {
+      const list = getSavedExamList();
+      setAvailableExams(list);
+    };
+    updateList();
+    const unsub = subscribeToSyncMessages((msg) => {
+      if (msg.type === 'CONFIG_UPDATED') {
+        updateList();
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const handleExamSelect = (examId: string) => {
+    setSelectedExamId(examId);
+    const found = availableExams.find((e) => e.id === examId);
+    if (found) {
+      setActiveConfig(found.payload);
+      setEnteredPin(found.payload.exam_config.token_settings.access_pin || '');
+    }
+  };
+
   // Student details in simulator
-  const [studentName, setStudentName] = useState('Raden Fajar Pratama');
-  const [studentNis, setStudentNis] = useState('202611048');
+  const [studentName, setStudentName] = useState('Gede Hari Wijaya');
+  const [studentClass, setStudentClass] = useState('XII MIPA 1');
+  const [studentAbsen, setStudentAbsen] = useState('14');
+  const [studentNis, setStudentNis] = useState('14');
   const [enteredPin, setEnteredPin] = useState(currentExam.token_settings.access_pin || 'AMAN-2026');
+
+  // Keep studentNis synced with studentAbsen for token and network checks
+  useEffect(() => {
+    setStudentNis(studentAbsen);
+  }, [studentAbsen]);
 
   // Exam phase: 'lobby' | 'active' | 'warning_penalty' | 'blocked_permanent' | 'finished'
   const [phase, setPhase] = useState<'lobby' | 'active' | 'warning_penalty' | 'blocked_permanent' | 'finished'>('lobby');
@@ -106,7 +155,9 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
     return {
       studentId: sessionIdRef.current,
       studentName,
-      studentNis,
+      studentNis: studentAbsen,
+      studentAbsen,
+      studentClass,
       examId: currentExam.exam_name,
       status,
       device: navigator.userAgent.includes('Mobile') ? 'Smartphone (Android/iOS)' : 'Desktop/Laptop (Windows/Mac)',
@@ -607,36 +658,78 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
               <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-inner">
                 <ShieldCheck className="w-8 h-8" />
               </div>
-              <h1 className="text-xl sm:text-2xl font-black text-white">
-                {currentExam.exam_name || 'Ujian Penilaian Sekolah'}
+              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight uppercase">
+                ASESMEN SISWA
               </h1>
-              <p className="text-xs text-slate-400">
-                Target: {currentExam.target_class} | Durasi Token hingga: {currentExam.token_settings.expiration_datetime}
-              </p>
             </div>
 
             {/* Student ID Inputs */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-2xl border border-slate-800/80">
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-400">Nama Lengkap Peserta</label>
+              {/* Dropdown Pilihan Mata Pelajaran / Asesmen */}
+              <div className="space-y-1.5 sm:col-span-2">
+                <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Pilih Mata Pelajaran / Ujian yang Diikuti:</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-mono">
+                    {availableExams.length} Ujian Siap
+                  </span>
+                </label>
+                <select
+                  id="select-exam-dropdown"
+                  value={selectedExamId}
+                  onChange={(e) => handleExamSelect(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm font-bold text-white focus:border-emerald-500 outline-none cursor-pointer"
+                >
+                  {availableExams.map((exam) => (
+                    <option key={exam.id} value={exam.id}>
+                      {exam.name} — ({exam.targetClass})
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-slate-400">
+                  Daftar ujian ini otomatis disinkronkan dari menu Konfigurasi Guru.
+                </p>
+              </div>
+
+              {/* Form Nama Lengkap */}
+              <div className="space-y-1 sm:col-span-2">
+                <label className="text-xs font-semibold text-slate-400">Nama Lengkap Siswa</label>
                 <input
                   type="text"
                   value={studentName}
                   onChange={(e) => setStudentName(e.target.value)}
+                  placeholder="Contoh: Gede Hari Wijaya"
                   className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-white focus:border-emerald-500 outline-none"
                 />
               </div>
 
+              {/* Form Kelas */}
               <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-400">Nomor Induk Siswa (NIS)</label>
+                <label className="text-xs font-semibold text-slate-400">Kelas</label>
                 <input
                   type="text"
-                  value={studentNis}
-                  onChange={(e) => setStudentNis(e.target.value)}
+                  value={studentClass}
+                  onChange={(e) => setStudentClass(e.target.value)}
+                  placeholder="Contoh: XII MIPA 1"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-white focus:border-emerald-500 outline-none"
+                />
+              </div>
+
+              {/* Form Nomor Absen */}
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-400">Nomor Absen</label>
+                <input
+                  type="text"
+                  value={studentAbsen}
+                  onChange={(e) => setStudentAbsen(e.target.value)}
+                  placeholder="Contoh: 14"
                   className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-white focus:border-emerald-500 outline-none font-mono"
                 />
               </div>
 
+              {/* PIN Token Masuk */}
               <div className="space-y-1 sm:col-span-2">
                 <label className="text-xs font-semibold text-slate-400">PIN Token Masuk Ujian</label>
                 <input
@@ -697,7 +790,7 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
                 <ShieldCheck className="w-4 h-4" /> SECURE SANDBOX AKTIF
               </span>
               <span className="text-slate-400 hidden md:inline">
-                Peserta: {studentName} ({studentNis})
+                Peserta: {studentName} ({studentClass} - No. Absen: {studentAbsen})
               </span>
             </div>
 
@@ -942,8 +1035,12 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
                 <span className="text-white font-sans font-medium">{studentName}</span>
               </div>
               <div className="flex justify-between text-slate-400">
-                <span>NIS Siswa:</span>
-                <span className="text-white font-bold">{studentNis}</span>
+                <span>Kelas:</span>
+                <span className="text-white font-bold">{studentClass}</span>
+              </div>
+              <div className="flex justify-between text-slate-400">
+                <span>Nomor Absen:</span>
+                <span className="text-white font-bold">{studentAbsen}</span>
               </div>
               <div className="flex justify-between text-slate-400">
                 <span>Waktu Pemblokiran:</span>
@@ -1036,12 +1133,13 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
             {/* Target Student Identity Verification */}
             <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs flex justify-between items-center">
               <div>
-                <span className="text-slate-400">Nama Siswa:</span>{' '}
-                <strong className="text-white">{studentName}</strong>
+                <span className="text-slate-400">Siswa:</span>{' '}
+                <strong className="text-white">{studentName}</strong>{' '}
+                <span className="text-slate-400 font-mono">({studentClass})</span>
               </div>
               <div>
-                <span className="text-slate-400">NIS:</span>{' '}
-                <strong className="text-emerald-400 font-mono">{studentNis}</strong>
+                <span className="text-slate-400">No. Absen:</span>{' '}
+                <strong className="text-emerald-400 font-mono">{studentAbsen}</strong>
               </div>
             </div>
 
@@ -1073,7 +1171,7 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Token Pemulihan NIS
+                Token Pemulihan Absen
               </button>
             </div>
 
@@ -1115,10 +1213,10 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
                 <div className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs text-slate-300 space-y-1">
                   <div className="font-semibold text-indigo-400 flex items-center gap-1.5">
                     <Key className="w-4 h-4" />
-                    <span>Token Pemulihan Khusus Siswa (NIS-Bound)</span>
+                    <span>Token Pemulihan Khusus Siswa (Absen-Bound)</span>
                   </div>
                   <p className="text-[11px] text-slate-400">
-                    Token ini diterbitkan khusus oleh pengawas untuk NIS <strong>{studentNis}</strong>. Siswa dapat <strong>resume ujian dari titik terakhir tanpa kehilangan lembar jawaban</strong>.
+                    Token ini diterbitkan khusus oleh pengawas untuk Nomor Absen <strong>{studentAbsen}</strong> ({studentClass}). Siswa dapat <strong>resume ujian dari titik terakhir tanpa kehilangan lembar jawaban</strong>.
                   </p>
                 </div>
 

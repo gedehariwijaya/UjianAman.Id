@@ -25,6 +25,15 @@ export interface ExamPayload {
   exam_config: ExamConfig;
 }
 
+export interface SavedExamItem {
+  id: string;
+  name: string;
+  targetClass: string;
+  formUrl: string;
+  createdAt: number;
+  payload: ExamPayload;
+}
+
 export interface StudentViolationRecord {
   id: string;
   type: 'tab_switch' | 'fullscreen_exit' | 'split_screen' | 'blur' | 'devtools_or_key' | 'floating_app';
@@ -37,6 +46,8 @@ export interface StudentSession {
   studentId: string;
   studentName: string;
   studentNis: string;
+  studentAbsen?: string;
+  studentClass?: string;
   examId: string;
   status: 'active' | 'warning' | 'blocked' | 'submitted' | 'safe_exited';
   device: string;
