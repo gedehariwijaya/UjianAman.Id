@@ -221,12 +221,17 @@ export function subscribeToCloudActiveConfig(onUpdate: (config: ExamPayload) => 
 // 2. CLOUD SYNC: STUDENT SESSIONS & PROCTOR SUPERVISION
 // ---------------------------------------------------------------------------
 
+// Track last cloud sync timestamp and state per student to throttle redundant network writes
+const lastSyncMeta: Record<string, { timestamp: number; status: string; violationsCount: number }> = {};
+
 /**
  * Sends student session update / heartbeat to Firestore
- * This allows proctor dashboard on teacher's laptop to monitor student phones anywhere!
+ * Optimized for high concurrency (150+ students) with intelligent change-detection:
+ * - Immediate write on status changes, violations, or unlock events
+ * - Routine heartbeats throttled to prevent quota exhaustion and WiFi congestion
  */
-export async function cloudSyncStudentSession(session: StudentSession): Promise<void> {
-  // Update local session
+export async function cloudSyncStudentSession(session: StudentSession, forceSync: boolean = false): Promise<void> {
+  // 1. Update local session immediately
   const localSessions = getLocalSessions();
   const idx = localSessions.findIndex((s) => s.studentId === session.studentId);
   let nextSessions: StudentSession[];
@@ -238,7 +243,28 @@ export async function cloudSyncStudentSession(session: StudentSession): Promise<
   }
   saveLocalSessions(nextSessions);
 
-  // Sync to Firestore
+  // 2. Determine if Firestore write is needed
+  const now = Date.now();
+  const prevMeta = lastSyncMeta[session.studentId];
+  const violationsCount = session.recentViolations ? session.recentViolations.length : 0;
+
+  const isStateChange = !prevMeta || 
+    prevMeta.status !== session.status || 
+    prevMeta.violationsCount !== violationsCount || 
+    forceSync;
+
+  // Throttle routine heartbeats to at least 15 seconds unless state changed
+  if (!isStateChange && prevMeta && (now - prevMeta.timestamp < 15000)) {
+    return;
+  }
+
+  lastSyncMeta[session.studentId] = {
+    timestamp: now,
+    status: session.status,
+    violationsCount,
+  };
+
+  // 3. Sync to Firestore with error safety
   try {
     const sessionDocRef = doc(db, FS_COLLECTIONS.SESSIONS, session.studentId);
     await setDoc(sessionDocRef, {
@@ -252,9 +278,21 @@ export async function cloudSyncStudentSession(session: StudentSession): Promise<
 
 /**
  * Proctor listens to real-time student sessions across all devices & phones
+ * Uses a trailing buffer (300ms) to batch high-frequency snapshot arrivals from 150 students
  */
 export function subscribeToCloudSessions(onUpdate: (sessions: StudentSession[]) => void): () => void {
   try {
+    let batchTimeout: NodeJS.Timeout | null = null;
+    let pendingSessions: StudentSession[] | null = null;
+
+    const dispatchUpdate = () => {
+      if (pendingSessions) {
+        saveLocalSessions(pendingSessions);
+        onUpdate(pendingSessions);
+        pendingSessions = null;
+      }
+    };
+
     const sessionsCol = collection(db, FS_COLLECTIONS.SESSIONS);
     const unsub = onSnapshot(sessionsCol, (snapshot) => {
       const cloudSessions: StudentSession[] = [];
@@ -266,8 +304,13 @@ export function subscribeToCloudSessions(onUpdate: (sessions: StudentSession[]) 
       });
 
       if (cloudSessions.length > 0) {
-        saveLocalSessions(cloudSessions);
-        onUpdate(cloudSessions);
+        pendingSessions = cloudSessions;
+        if (!batchTimeout) {
+          batchTimeout = setTimeout(() => {
+            batchTimeout = null;
+            dispatchUpdate();
+          }, 300);
+        }
       } else {
         onUpdate(getLocalSessions());
       }
@@ -276,7 +319,10 @@ export function subscribeToCloudSessions(onUpdate: (sessions: StudentSession[]) 
       onUpdate(getLocalSessions());
     });
 
-    return unsub;
+    return () => {
+      if (batchTimeout) clearTimeout(batchTimeout);
+      unsub();
+    };
   } catch (err) {
     console.warn('Failed to subscribe to Firestore sessions:', err);
     onUpdate(getLocalSessions());

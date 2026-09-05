@@ -29,7 +29,9 @@ import {
   FileSignature,
   RotateCcw,
   LogOut,
-  ExternalLink
+  ExternalLink,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { ProctorLog, StudentSession, ExamPayload, DynamicMasterPin, EmergencyRecoveryToken } from '../types';
 import { playChimeAlert } from '../utils/audioAlerts';
@@ -65,6 +67,8 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'warning' | 'blocked' | 'safe_exited'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number | 'all'>(24);
   const [selectedStudent, setSelectedStudent] = useState<StudentSession | null>(null);
   const [broadcastAlertText, setBroadcastAlertText] = useState('');
   const [showBroadcastModal, setShowBroadcastModal] = useState(false);
@@ -432,6 +436,105 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
 
     setLogs(initialLogs);
     saveLogs(initialLogs);
+    setCurrentPage(1);
+  };
+
+  // Seed 150 students stress test simulation across 5 classes
+  const handleSeedStressTest150 = () => {
+    const firstNames = [
+      'Aditya', 'Agus', 'Ahmad', 'Aisyah', 'Alif', 'Ananda', 'Andi', 'Angga', 'Anisa', 'Annisa',
+      'Arif', 'Arya', 'Aulia', 'Bagus', 'Bayu', 'Bima', 'Bintang', 'Budi', 'Cahaya', 'Citra',
+      'Daffa', 'Danang', 'Daniel', 'Deni', 'Devi', 'Dewi', 'Dian', 'Dimas', 'Dina', 'Dini',
+      'Doni', 'Dwi', 'Eka', 'Eko', 'Elsa', 'Endang', 'Fadhil', 'Fajar', 'Farhan', 'Fathir',
+      'Fitri', 'Galang', 'Gede', 'Gilang', 'Gita', 'Hafiz', 'Hana', 'Hansen', 'Hari', 'Hendra',
+      'Ilham', 'Indah', 'Indra', 'Intan', 'Iqbal', 'Irfan', 'Ivan', 'Joko', 'Kartika', 'Kevin',
+      'Laras', 'Lestari', 'Lukman', 'Mahendra', 'Mega', 'Melani', 'Mita', 'Muhammad', 'Nabil', 'Nadia'
+    ];
+    const lastNames = [
+      'Pratama', 'Saputra', 'Wijaya', 'Kusuma', 'Santoso', 'Utami', 'Lestari', 'Rahmawati', 'Setiawan', 'Hidayat',
+      'Nugroho', 'Wibowo', 'Pratiwi', 'Suryono', 'Wardhana', 'Permana', 'Gunawan', 'Suhendra', 'Hartono', 'Purnomo'
+    ];
+    const classes = ['XII MIPA 1', 'XII MIPA 2', 'XII MIPA 3', 'XII IPS 1', 'XII IPS 2'];
+
+    const seeded150: StudentSession[] = [];
+    const simulatedLogs: ProctorLog[] = [];
+
+    for (let i = 1; i <= 150; i++) {
+      const fName = firstNames[(i * 7) % firstNames.length];
+      const lName = lastNames[(i * 3) % lastNames.length];
+      const name = `${fName} ${lName}`;
+      const cls = classes[Math.floor((i - 1) / 30)];
+      const absen = ((i - 1) % 30) + 1;
+      const nis = `202611${(100 + i).toString().padStart(3, '0')}`;
+
+      // Realistic state distribution: 140 active (focused), 6 warning (penalized), 4 blocked
+      let status: 'active' | 'warning' | 'blocked' = 'active';
+      let violationsCount = 0;
+      let penaltySecondsLeft = 0;
+
+      if (i === 14 || i === 42 || i === 88 || i === 125) {
+        status = 'blocked';
+        violationsCount = 2;
+      } else if (i === 7 || i === 33 || i === 65 || i === 99 || i === 112 || i === 140) {
+        status = 'warning';
+        violationsCount = 1;
+        penaltySecondsLeft = 6;
+      }
+
+      const devices = [
+        'Samsung Galaxy A15 (Android)', 
+        'Xiaomi Redmi Note 13 (Android)', 
+        'OPPO Reno 11 (Android)', 
+        'Vivo Y27 (Android)', 
+        'iPhone 13 (iOS)', 
+        'Laptop Acer Aspire (Windows 11)'
+      ];
+
+      seeded150.push({
+        studentId: `sim_stu_150_${i}`,
+        studentName: name,
+        studentNis: nis,
+        studentClass: cls,
+        studentAbsen: absen.toString(),
+        examId: config.exam_config.exam_name,
+        status,
+        device: devices[i % devices.length],
+        os: i % 5 === 4 ? 'Windows 11 x64' : 'Android 14',
+        browser: 'UjianAman Secure Sandbox',
+        violationsCount,
+        maxViolations: config.exam_config.security_rules.max_allowed_violations,
+        penaltySecondsLeft,
+        lastHeartbeat: Date.now() - (i % 15) * 1000,
+        joinedAt: Date.now() - 3600000 + (i * 15000),
+        recentViolations: violationsCount > 0 ? [
+          {
+            id: `v_150_${i}`,
+            type: 'tab_switch',
+            title: 'Berpindah Tab / Jendela',
+            description: 'Siswa meninggalkan tab ujian.',
+            timestamp: Date.now() - 45000,
+          }
+        ] : [],
+      });
+
+      if (status === 'blocked') {
+        simulatedLogs.push({
+          id: `log_150_b_${i}`,
+          timestamp: Date.now() - (i * 30000),
+          studentName: name,
+          studentNis: nis,
+          type: 'tab_switch',
+          details: `Pelanggaran berulang: Layar terkunci permanen sesuai protokol keamanan.`,
+          severity: 'danger',
+        });
+      }
+    }
+
+    setSessions(seeded150);
+    saveSessions(seeded150);
+    setLogs(simulatedLogs);
+    saveLogs(simulatedLogs);
+    setCurrentPage(1);
   };
 
   // Reset all
@@ -462,11 +565,17 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
       const q = searchQuery.toLowerCase();
       return (
         s.studentName.toLowerCase().includes(q) ||
-        s.studentNis.toLowerCase().includes(q)
+        s.studentNis.toLowerCase().includes(q) ||
+        (s.studentClass && s.studentClass.toLowerCase().includes(q))
       );
     }
     return true;
   });
+
+  const totalPages = pageSize === 'all' ? 1 : Math.ceil(filteredSessions.length / (pageSize as number));
+  const displayedSessions = pageSize === 'all' 
+    ? filteredSessions 
+    : filteredSessions.slice((currentPage - 1) * (pageSize as number), currentPage * (pageSize as number));
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
@@ -521,9 +630,19 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
           <button
             onClick={handleSeedSimulationClass}
             className="px-3.5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md shadow-indigo-600/20 flex items-center gap-1.5"
+            title="Simulasi ruang kelas standar (12 siswa)"
           >
             <Sparkles className="w-4 h-4" />
             <span>Simulasi 12 Siswa</span>
+          </button>
+
+          <button
+            onClick={handleSeedStressTest150}
+            className="px-3.5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition shadow-md shadow-teal-600/20 flex items-center gap-1.5"
+            title="Simulasi skala penuh 150 siswa (5 kelas) untuk menguji performa & stabilitas sistem"
+          >
+            <Users className="w-4 h-4" />
+            <span>Simulasi Skala 150 Siswa</span>
           </button>
 
           <button
@@ -771,8 +890,11 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
               <input
                 type="text"
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Cari nama atau NIS siswa..."
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                placeholder="Cari nama, NIS, atau kelas siswa..."
                 className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:border-indigo-500 outline-none"
               />
             </div>
@@ -780,7 +902,7 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
             {/* Filter Tabs */}
             <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 text-xs font-semibold overflow-x-auto">
               <button
-                onClick={() => setFilterStatus('all')}
+                onClick={() => { setFilterStatus('all'); setCurrentPage(1); }}
                 className={`px-3 py-1.5 rounded-lg transition whitespace-nowrap ${
                   filterStatus === 'all' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
@@ -788,7 +910,7 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
                 Semua ({totalCount})
               </button>
               <button
-                onClick={() => setFilterStatus('active')}
+                onClick={() => { setFilterStatus('active'); setCurrentPage(1); }}
                 className={`px-3 py-1.5 rounded-lg transition whitespace-nowrap ${
                   filterStatus === 'active' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
@@ -796,7 +918,15 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
                 Fokus ({activeCount})
               </button>
               <button
-                onClick={() => setFilterStatus('blocked')}
+                onClick={() => { setFilterStatus('warning'); setCurrentPage(1); }}
+                className={`px-3 py-1.5 rounded-lg transition whitespace-nowrap ${
+                  filterStatus === 'warning' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Penalti ({warningCount})
+              </button>
+              <button
+                onClick={() => { setFilterStatus('blocked'); setCurrentPage(1); }}
                 className={`px-3 py-1.5 rounded-lg transition whitespace-nowrap ${
                   filterStatus === 'blocked' ? 'bg-rose-600 text-white' : 'text-slate-400 hover:text-white'
                 }`}
@@ -804,7 +934,7 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
                 Terkunci ({blockedCount})
               </button>
               <button
-                onClick={() => setFilterStatus('safe_exited')}
+                onClick={() => { setFilterStatus('safe_exited'); setCurrentPage(1); }}
                 className={`px-3 py-1.5 rounded-lg transition whitespace-nowrap ${
                   filterStatus === 'safe_exited' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'
                 }`}
@@ -820,7 +950,7 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
               <Users className="w-10 h-10 text-slate-600 mx-auto" />
               <p className="text-sm font-semibold text-slate-300">Belum Ada Siswa yang Terkoneksi</p>
               <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Buka tab <strong>Asesmen Siswa</strong> untuk menguji satu sesi langsung, atau klik tombol <strong>"Simulasi 12 Siswa"</strong> di atas.
+                Buka tab <strong>Asesmen Siswa</strong> untuk menguji satu sesi langsung, atau klik tombol <strong>"Simulasi Skala 150 Siswa"</strong> di atas.
               </p>
               <button
                 onClick={onOpenPlayer}
@@ -830,8 +960,9 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {filteredSessions.map((student) => {
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {displayedSessions.map((student) => {
                 const isBlocked = student.status === 'blocked';
                 const isWarning = student.status === 'warning';
                 const isSafeExited = student.status === 'safe_exited';
@@ -953,6 +1084,75 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
                   </div>
                 );
               })}
+            </div>
+
+            {/* Pagination Controls for High-Concurrency (150 students) */}
+            {filteredSessions.length > 24 && (
+              <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                <div className="text-slate-400">
+                  Menampilkan{' '}
+                  <strong className="text-white">
+                    {pageSize === 'all'
+                      ? filteredSessions.length
+                      : `${(currentPage - 1) * (pageSize as number) + 1} - ${Math.min(
+                          currentPage * (pageSize as number),
+                          filteredSessions.length
+                        )}`}
+                  </strong>{' '}
+                  dari <strong className="text-white">{filteredSessions.length}</strong> siswa
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    disabled={currentPage <= 1 || pageSize === 'all'}
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-300 transition"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  {pageSize !== 'all' && (
+                    <div className="flex items-center gap-1">
+                      {Array.from({ length: Math.min(totalPages, 7) }, (_, idx) => {
+                        const pageNum = idx + 1;
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`w-7 h-7 rounded-lg text-xs font-semibold transition ${
+                              currentPage === pageNum
+                                ? 'bg-indigo-600 text-white'
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                      {totalPages > 7 && <span className="text-slate-500 px-1">...</span>}
+                    </div>
+                  )}
+
+                  <button
+                    disabled={currentPage >= totalPages || pageSize === 'all'}
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-slate-800 text-slate-300 transition"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setPageSize((prev) => (prev === 'all' ? 24 : 'all'));
+                      setCurrentPage(1);
+                    }}
+                    className="ml-2 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition"
+                  >
+                    {pageSize === 'all' ? 'Mode Halaman (24)' : 'Tampilkan Semua'}
+                  </button>
+                </div>
+              </div>
+            )}
             </div>
           )}
         </div>

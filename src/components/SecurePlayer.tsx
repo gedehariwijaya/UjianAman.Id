@@ -289,10 +289,11 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
   useEffect(() => {
     if (phase === 'lobby') return;
 
-    // Send initial session
+    // Send initial or state-change session to cloud immediately
     const currentSession = getSessionObject();
-    cloudSyncStudentSession(currentSession);
+    cloudSyncStudentSession(currentSession, true);
 
+    // Concurrency-safe heartbeat interval (20s) to prevent quota exhaustion with 150+ students
     const interval = setInterval(() => {
       const sess = getSessionObject();
       broadcastMessage({
@@ -300,10 +301,10 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
         session: sess,
       });
       cloudSyncStudentSession(sess);
-    }, 5000);
+    }, 20000);
 
     return () => clearInterval(interval);
-  }, [phase, violations, penaltySeconds, studentName, studentNis]);
+  }, [phase, violations.length, studentName, studentNis]);
 
   // Listen for remote unblock messages from proctor dashboard
   useEffect(() => {
@@ -409,7 +410,7 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
   useEffect(() => {
     if (phase === 'lobby' || phase === 'blocked_permanent' || phase === 'finished') return;
 
-    // 1. Anti-Tab Switching via visibilitychange
+    // 1. Anti-Tab Switching via visibilitychange (Authoritative browser standard)
     const handleVisibilityChange = () => {
       if (document.hidden && security.block_tab_switch && !showPanicExitModal) {
         triggerViolation(
@@ -420,18 +421,45 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
       }
     };
 
-    // 2. Anti-Window Switching / Blur
+    // 2. Anti-Window Switching / Blur with intelligent debounce and iframe interaction detection
+    let blurTimeout: NodeJS.Timeout | null = null;
+
     const handleWindowBlur = () => {
-      if (security.block_tab_switch && !showPanicExitModal) {
-        triggerViolation(
-          'blur',
-          'Fokus Jendela Hilang',
-          'Kursor atau aplikasi lain di luar browser aktif (indikasi membuka aplikasi eksternal).'
-        );
+      if (blurTimeout) clearTimeout(blurTimeout);
+
+      // Debounce window blur (750ms) to prevent false violations from fast scrolling, momentum flings, or iframe focus
+      blurTimeout = setTimeout(() => {
+        // A. If student tapped or scrolled inside the exam iframe (e.g. Google Form) -> NORMAL INTERACTION, NEVER A VIOLATION!
+        if (document.activeElement && document.activeElement.tagName === 'IFRAME') {
+          return;
+        }
+
+        // B. If document is still visible on screen, this was a momentary scroll gesture, touch edge fling, or browser focus event
+        if (document.visibilityState === 'visible' && !document.hidden) {
+          return;
+        }
+
+        // C. Only trigger if tab switch detection is enabled, modal is closed, and page is genuinely hidden/switched
+        if (document.hidden && security.block_tab_switch && !showPanicExitModal) {
+          triggerViolation(
+            'tab_switch',
+            'Anti-Tab Switching Terpicu',
+            'Siswa meninggalkan tab ujian, membuka tab baru, atau meminimalkan browser.'
+          );
+        }
+      }, 750);
+    };
+
+    const handleWindowFocus = () => {
+      // If window regained focus quickly (e.g. fast scrolling bounce or quick touch tap), cancel any pending blur penalty
+      if (blurTimeout) {
+        clearTimeout(blurTimeout);
+        blurTimeout = null;
       }
     };
 
-    // 3. Fullscreen Exit Detection
+    // 3. Fullscreen Exit Detection with Debounce
+    let fullscreenTimeout: NodeJS.Timeout | null = null;
     const handleFullscreenChange = () => {
       const isCurrentlyFullscreen = !!(
         document.fullscreenElement ||
@@ -440,27 +468,57 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
       );
       setIsFullscreen(isCurrentlyFullscreen);
 
+      if (fullscreenTimeout) clearTimeout(fullscreenTimeout);
+
       if (!isCurrentlyFullscreen && security.force_fullscreen && !showPanicExitModal) {
-        triggerViolation(
-          'fullscreen_exit',
-          'Keluar dari Mode Layar Penuh',
-          'Siswa keluar dari mode fullscreen yang diwajibkan oleh protokol ujian.'
-        );
+        fullscreenTimeout = setTimeout(() => {
+          const stillNotFullscreen = !(
+            document.fullscreenElement ||
+            (document as any).webkitFullscreenElement ||
+            (document as any).mozFullScreenElement
+          );
+          if (stillNotFullscreen && document.visibilityState === 'visible' && !showPanicExitModal) {
+            triggerViolation(
+              'fullscreen_exit',
+              'Keluar dari Mode Layar Penuh',
+              'Siswa keluar dari mode fullscreen yang diwajibkan oleh protokol ujian.'
+            );
+          }
+        }, 800);
       }
     };
 
-    // 4. Anti-Split Screen & Floating Window detection via window resize ratio
+    // 4. Anti-Split Screen & Floating Window detection (Robust against mobile fast-scroll address bar collapse)
+    let resizeTimeout: NodeJS.Timeout | null = null;
+    let lastKnownWidth = window.innerWidth;
+
     const handleWindowResize = () => {
-      if (security.block_floating_apps && !showPanicExitModal) {
-        const currentRatio = window.innerWidth / (window.screen.availWidth || window.innerWidth);
-        if (currentRatio < 0.7) {
+      if (!security.block_floating_apps || showPanicExitModal) return;
+
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+
+      // Debounce resize to prevent false positives when mobile address bar hides/shows during fast scrolling!
+      resizeTimeout = setTimeout(() => {
+        const currentWidth = window.innerWidth;
+        const screenWidth = window.screen.availWidth || window.screen.width || currentWidth;
+
+        // If width changed by less than 40px, it's purely vertical height variation (mobile address bar collapse on scroll or keyboard) -> IGNORE!
+        if (Math.abs(currentWidth - lastKnownWidth) < 40) {
+          lastKnownWidth = currentWidth;
+          return;
+        }
+        lastKnownWidth = currentWidth;
+
+        // Only trigger if screen is persistently split (width is under 65% of screen width)
+        const currentRatio = currentWidth / screenWidth;
+        if (currentRatio < 0.65) {
           triggerViolation(
             'split_screen',
             'Split Screen / Floating Apps Terdeteksi',
-            'Lebar layar berkurang drastis di bawah 70% (indikasi pembagian layar atau jendela mengambang).'
+            'Lebar layar berkurang drastis di bawah 65% (indikasi pembagian layar atau jendela mengambang).'
           );
         }
-      }
+      }, 1200);
     };
 
     // 5. Anti-Cheat Keyboard & Panic Combo Shortcut (Ctrl + Alt + Shift + Q)
@@ -493,14 +551,19 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     window.addEventListener('resize', handleWindowResize);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
+      if (blurTimeout) clearTimeout(blurTimeout);
+      if (fullscreenTimeout) clearTimeout(fullscreenTimeout);
+      if (resizeTimeout) clearTimeout(resizeTimeout);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('focus', handleWindowFocus);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       window.removeEventListener('resize', handleWindowResize);
       window.removeEventListener('keydown', handleKeyDown);
@@ -652,6 +715,11 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
     }
   };
 
+  const handleTouchMove = () => {
+    // If user is actively scrolling or moving fingers, cancel any panic hold so normal gestures never trigger violations
+    cancelPanicHold();
+  };
+
   // Safe Exit Verification Execution
   const handleConfirmPanicExit = () => {
     setPanicExitError('');
@@ -683,6 +751,7 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
     <div
       ref={containerRef}
       onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onTouchCancel={cancelPanicHold}
       className="relative min-h-[calc(100vh-4rem)] bg-slate-950 text-slate-100 flex flex-col select-none"
@@ -695,7 +764,7 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
           <span className="text-slate-400 hidden sm:inline">| Perlindungan Kiosk & Protokol Anti-Curang</span>
         </div>
 
-        {/* Panic Corner Hotspot (Right Side of Bar): Hold 5s with mouse or 3 fingers */}
+        {/* Panic Corner Hotspot & Status */}
         <div className="flex items-center gap-2">
           {phase === 'active' && (
             <div className="flex items-center gap-2">
@@ -705,21 +774,6 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
                   {violations.length} / {security.max_allowed_violations}
                 </span>
               </div>
-
-              {/* Secret Panic Button for Proctors / Desktop Testing */}
-              <button
-                id="panic-exit-trigger-hotspot"
-                onMouseDown={startPanicHold}
-                onMouseUp={cancelPanicHold}
-                onMouseLeave={cancelPanicHold}
-                onTouchStart={startPanicHold}
-                onTouchEnd={cancelPanicHold}
-                title="Kombinasi Gestur / Tombol Darurat: Tekan & tahan 5 detik (atau 3 jari) untuk Verifikasi Keluar Aman Pengawas"
-                className="px-2.5 py-1 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/40 text-rose-300 text-[11px] font-semibold transition flex items-center gap-1.5 active:scale-95"
-              >
-                <Fingerprint className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
-                <span className="hidden md:inline">Hotspot Darurat (Tahan 5s)</span>
-              </button>
             </div>
           )}
 
@@ -974,41 +1028,12 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
               </span>
             </div>
 
-            {/* Test Violation Triggers for Teachers & Panic Trigger Shortcut hint */}
+            {/* Student Exam Status: Clean, focused, no test violation buttons or panic buttons */}
             <div className="flex items-center gap-2">
-              <span className="text-[11px] text-slate-400 hidden lg:inline">Tes Simulasi:</span>
-              <button
-                onClick={() =>
-                  triggerViolation(
-                    'tab_switch',
-                    'Uji Coba Pindah Tab',
-                    'Simulasi manual tombol pindah tab browser oleh penguji'
-                  )
-                }
-                className="px-2 py-1 rounded-md bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 text-[10px] font-medium"
-              >
-                Picu Tab Switch
-              </button>
-              <button
-                onClick={() =>
-                  triggerViolation(
-                    'split_screen',
-                    'Uji Coba Split Screen',
-                    'Simulasi manual pembagian layar atau floating apps'
-                  )
-                }
-                className="px-2 py-1 rounded-md bg-amber-950/60 hover:bg-amber-900/80 text-amber-300 border border-amber-800/60 text-[10px] font-medium"
-              >
-                Picu Split Screen
-              </button>
-              <button
-                onClick={() => setShowPanicExitModal(true)}
-                className="px-2 py-1 rounded-md bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-800/60 text-[10px] font-medium flex items-center gap-1"
-                title="Buka Dialog Panic Exit Pengawas (Ctrl+Alt+Shift+Q)"
-              >
-                <LogOut className="w-3 h-3" />
-                <span>Panic Exit</span>
-              </button>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-950/80 border border-emerald-800/80 text-emerald-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Terkoneksi Aman</span>
+              </span>
             </div>
           </div>
 
