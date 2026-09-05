@@ -1,0 +1,6 @@
+{
+  "name": "UjianAman.id",
+  "description": "Sistem Keamanan & Pengawasan Ujian Online Berbasis Web (Secure Exam Player)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
