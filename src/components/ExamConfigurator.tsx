@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, 
   Lock, 
@@ -28,7 +28,8 @@ import {
   saveExamConfig, 
   getSavedExamList, 
   saveExamToList, 
-  deleteExamFromList 
+  deleteExamFromList,
+  subscribeToSyncMessages
 } from '../utils/proctorSync';
 
 interface ExamConfiguratorProps {
@@ -70,6 +71,31 @@ export const ExamConfigurator: React.FC<ExamConfiguratorProps> = ({
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
   const [saveSuccessBanner, setSaveSuccessBanner] = useState(false);
   const [activePreset, setActivePreset] = useState<'strict' | 'zero' | 'practice'>('strict');
+
+  // Keep saved exams list synced across components & tabs
+  useEffect(() => {
+    const updateList = () => {
+      setSavedExams(getSavedExamList());
+    };
+
+    const unsub = subscribeToSyncMessages((msg) => {
+      if (msg.type === 'EXAM_LIST_UPDATED' || msg.type === 'CONFIG_UPDATED') {
+        updateList();
+      }
+    });
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'ujianaman_saved_exams_list') {
+        updateList();
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      unsub();
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   // Apply Quick Preset
   const applyPreset = (preset: 'strict' | 'zero' | 'practice') => {

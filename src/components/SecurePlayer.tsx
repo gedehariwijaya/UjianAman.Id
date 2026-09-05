@@ -24,7 +24,8 @@ import {
   HelpCircle,
   AlertTriangle,
   ArrowRight,
-  FileText
+  FileText,
+  RefreshCw
 } from 'lucide-react';
 import { ExamPayload, StudentSession, StudentViolationRecord, ProctorLog, EmergencyRecoveryToken, SavedExamItem } from '../types';
 import { playWarningBeep, playBlockAlarm, playChimeAlert } from '../utils/audioAlerts';
@@ -34,7 +35,8 @@ import {
   validateMasterPin, 
   validateAndRedeemRecoveryToken,
   getDynamicMasterPin,
-  getSavedExamList
+  getSavedExamList,
+  getSavedExamConfig
 } from '../utils/proctorSync';
 
 interface SecurePlayerProps {
@@ -44,47 +46,22 @@ interface SecurePlayerProps {
 
 export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer }) => {
   const [availableExams, setAvailableExams] = useState<SavedExamItem[]>(() => getSavedExamList());
-  const [activeConfig, setActiveConfig] = useState<ExamPayload>(config);
+  const [activeConfig, setActiveConfig] = useState<ExamPayload>(() => {
+    const list = getSavedExamList();
+    const match = list.find((e) => e.name === config.exam_config.exam_name);
+    return match ? match.payload : (list[0]?.payload || config);
+  });
   const [selectedExamId, setSelectedExamId] = useState<string>(() => {
     const list = getSavedExamList();
     const match = list.find((e) => e.name === config.exam_config.exam_name);
     return match ? match.id : (list[0]?.id || 'default');
   });
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>('Baru saja');
+
   const currentExam = activeConfig.exam_config;
   const security = currentExam.security_rules;
-
-  // Sync when prop config changes
-  useEffect(() => {
-    setActiveConfig(config);
-    const list = getSavedExamList();
-    const match = list.find((e) => e.name === config.exam_config.exam_name);
-    if (match) setSelectedExamId(match.id);
-  }, [config]);
-
-  // Keep available exams updated in real-time
-  useEffect(() => {
-    const updateList = () => {
-      const list = getSavedExamList();
-      setAvailableExams(list);
-    };
-    updateList();
-    const unsub = subscribeToSyncMessages((msg) => {
-      if (msg.type === 'CONFIG_UPDATED') {
-        updateList();
-      }
-    });
-    return () => unsub();
-  }, []);
-
-  const handleExamSelect = (examId: string) => {
-    setSelectedExamId(examId);
-    const found = availableExams.find((e) => e.id === examId);
-    if (found) {
-      setActiveConfig(found.payload);
-      setEnteredPin(found.payload.exam_config.token_settings.access_pin || '');
-    }
-  };
 
   // Student details in simulator
   const [studentName, setStudentName] = useState('Gede Hari Wijaya');
@@ -92,6 +69,100 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
   const [studentAbsen, setStudentAbsen] = useState('14');
   const [studentNis, setStudentNis] = useState('14');
   const [enteredPin, setEnteredPin] = useState(currentExam.token_settings.access_pin || 'AMAN-2026');
+
+  // Unified sync function that always pulls the latest exam list & preserves / updates active selection
+  const syncExams = useCallback((preferredExamId?: string, incomingConfig?: ExamPayload) => {
+    const list = getSavedExamList();
+    setAvailableExams(list);
+    setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+
+    setSelectedExamId((prevSelectedId) => {
+      let targetId = preferredExamId || prevSelectedId;
+
+      // If incomingConfig provided (from CONFIG_UPDATED or prop change), match by exam_name
+      if (incomingConfig) {
+        const matchByConfig = list.find((e) => e.name === incomingConfig.exam_config.exam_name);
+        if (matchByConfig) {
+          targetId = matchByConfig.id;
+        }
+      }
+
+      const found = list.find((e) => e.id === targetId);
+      if (found) {
+        setActiveConfig(found.payload);
+        setEnteredPin((prevPin) => {
+          const freshPin = found.payload.exam_config.token_settings.access_pin || '';
+          return freshPin;
+        });
+        return found.id;
+      } else if (list.length > 0) {
+        // Fallback to first available exam
+        setActiveConfig(list[0].payload);
+        setEnteredPin(list[0].payload.exam_config.token_settings.access_pin || '');
+        return list[0].id;
+      } else if (incomingConfig) {
+        setActiveConfig(incomingConfig);
+        setEnteredPin(incomingConfig.exam_config.token_settings.access_pin || '');
+      }
+      return targetId;
+    });
+  }, []);
+
+  // Sync when prop config changes
+  useEffect(() => {
+    syncExams(undefined, config);
+  }, [config, syncExams]);
+
+  // Keep available exams and selected exam updated in real-time
+  useEffect(() => {
+    syncExams();
+
+    const unsub = subscribeToSyncMessages((msg) => {
+      if (msg.type === 'CONFIG_UPDATED') {
+        syncExams(undefined, msg.config);
+      } else if (msg.type === 'EXAM_LIST_UPDATED') {
+        syncExams();
+      }
+    });
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'ujianaman_saved_exams_list' || e.key === 'ujianaman_active_config') {
+        syncExams();
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    const handleFocus = () => {
+      syncExams();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      unsub();
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+    };
+  }, [syncExams]);
+
+  const handleManualRefresh = () => {
+    setIsRefreshing(true);
+    syncExams();
+    setTimeout(() => {
+      setIsRefreshing(false);
+    }, 450);
+  };
+
+  const handleExamSelect = (examId: string) => {
+    setSelectedExamId(examId);
+    const list = getSavedExamList();
+    const found = list.find((e) => e.id === examId);
+    if (found) {
+      setActiveConfig(found.payload);
+      setEnteredPin(found.payload.exam_config.token_settings.access_pin || '');
+    }
+  };
 
   // Keep studentNis synced with studentAbsen for token and network checks
   useEffect(() => {
@@ -666,30 +737,84 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
             {/* Student ID Inputs */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-2xl border border-slate-800/80">
               {/* Dropdown Pilihan Mata Pelajaran / Asesmen */}
-              <div className="space-y-1.5 sm:col-span-2">
-                <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
-                  <span className="flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
+              <div className="space-y-2 sm:col-span-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span>Pilih Mata Pelajaran / Ujian yang Diikuti:</span>
-                  </span>
-                  <span className="text-[10px] text-emerald-400 font-mono">
-                    {availableExams.length} Ujian Siap
-                  </span>
-                </label>
+                  </label>
+
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-[10px] text-emerald-400 bg-emerald-950/80 px-2.5 py-1 rounded-full border border-emerald-800/80 font-mono">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      {availableExams.length} Mata Pelajaran Siap
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={handleManualRefresh}
+                      disabled={isRefreshing}
+                      title="Segarkan daftar ujian dan data terkini"
+                      className="flex items-center gap-1.5 text-[11px] text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-lg border border-slate-700 transition active:scale-95 disabled:opacity-50 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-emerald-400' : 'text-slate-400'}`} />
+                      <span>{isRefreshing ? 'Menyinkron...' : 'Segarkan'}</span>
+                    </button>
+                  </div>
+                </div>
+
                 <select
                   id="select-exam-dropdown"
                   value={selectedExamId}
                   onChange={(e) => handleExamSelect(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm font-bold text-white focus:border-emerald-500 outline-none cursor-pointer"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm font-bold text-white focus:border-emerald-500 outline-none cursor-pointer shadow-sm transition"
                 >
-                  {availableExams.map((exam) => (
-                    <option key={exam.id} value={exam.id}>
-                      {exam.name} — ({exam.targetClass})
-                    </option>
-                  ))}
+                  {availableExams.length === 0 ? (
+                    <option value="">-- Belum ada ujian terbit --</option>
+                  ) : (
+                    availableExams.map((exam) => (
+                      <option key={exam.id} value={exam.id}>
+                        {exam.name} — ({exam.targetClass})
+                      </option>
+                    ))
+                  )}
                 </select>
+
+                {/* Detail Mata Pelajaran Terpilih (Selalu Terupdate) */}
+                {currentExam && (
+                  <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 text-xs space-y-2 mt-1.5 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <span className="font-bold text-white text-sm flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>{currentExam.exam_name || 'Ujian Tanpa Judul'}</span>
+                      </span>
+                      <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold">
+                        Target: {currentExam.target_class || 'Semua Kelas'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-400 pt-1.5 border-t border-slate-800">
+                      <span className="flex items-center gap-1">
+                        <span className="text-slate-300">Sumber Soal:</span>{' '}
+                        <strong className="text-slate-200">
+                          {currentExam.form_source_url ? (currentExam.form_source_url.includes('google.com') ? 'Google Forms Terhubung' : 'Form / LMS Terhubung') : 'Simulasi Internal'}
+                        </strong>
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <span className="text-slate-300">Protokol:</span>{' '}
+                        <span className="text-emerald-400 font-medium">
+                          {security.force_fullscreen ? 'Layar Penuh' : ''} • {security.block_tab_switch ? 'Anti-Pindah Tab' : ''}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-1 sm:ml-auto text-[10px] text-slate-400">
+                        Sinkronisasi: {lastSyncTime}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
                 <p className="text-[11px] text-slate-400">
-                  Daftar ujian ini otomatis disinkronkan dari menu Konfigurasi Guru.
+                  Daftar mata pelajaran dan aturan ujian di atas otomatis diperbarui setiap ada perubahan dari guru pengawas.
                 </p>
               </div>
 

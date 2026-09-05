@@ -39,7 +39,7 @@ export default function App() {
   const [blockedCount, setBlockedCount] = useState(0);
   const [violationCount, setViolationCount] = useState(0);
 
-  // Keep badge counts updated
+  // Keep badge counts and active config updated
   useEffect(() => {
     const updateCounts = () => {
       const sessions = getSavedSessions();
@@ -49,11 +49,25 @@ export default function App() {
 
     updateCounts();
 
-    const unsub = subscribeToSyncMessages(() => {
+    const unsub = subscribeToSyncMessages((msg) => {
       updateCounts();
+      if (msg.type === 'CONFIG_UPDATED') {
+        setConfig(msg.config);
+      }
     });
 
-    return () => unsub();
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'ujianaman_active_config') {
+        setConfig(getSavedExamConfig());
+      }
+      updateCounts();
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      unsub();
+      window.removeEventListener('storage', handleStorage);
+    };
   }, []);
 
   // When switching tabs
@@ -70,6 +84,8 @@ export default function App() {
         }, 100);
       }
     } else {
+      // Ensure latest config is loaded when returning to student tab
+      setConfig(getSavedExamConfig());
       setActiveMainTab('student-simulator');
     }
   };

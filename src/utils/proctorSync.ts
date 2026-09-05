@@ -39,6 +39,7 @@ export type SyncMessage =
   | { type: 'PROCTOR_UNLOCK'; studentId: string; method?: 'dynamic_pin' | 'recovery_token' | 'remote_dashboard' }
   | { type: 'PROCTOR_GLOBAL_ALERT'; message: string }
   | { type: 'CONFIG_UPDATED'; config: ExamPayload }
+  | { type: 'EXAM_LIST_UPDATED'; list: SavedExamItem[] }
   | { type: 'DYNAMIC_PIN_UPDATED'; pinData: DynamicMasterPin }
   | { type: 'RECOVERY_TOKEN_CREATED'; token: EmergencyRecoveryToken }
   | { type: 'RECOVERY_TOKEN_USED'; tokenId: string; studentNis: string }
@@ -177,6 +178,7 @@ export function saveExamList(list: SavedExamItem[]) {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(STORAGE_EXAM_LIST_KEY, JSON.stringify(list));
+    broadcastMessage({ type: 'EXAM_LIST_UPDATED', list });
   } catch (e) {
     console.error('Error saving exam list', e);
   }
@@ -246,8 +248,17 @@ export function saveExamToList(payload: ExamPayload, existingId?: string): Saved
 
 export function deleteExamFromList(id: string): SavedExamItem[] {
   const currentList = getSavedExamList();
+  const deletedItem = currentList.find((item) => item.id === id);
   const filtered = currentList.filter((item) => item.id !== id);
   saveExamList(filtered);
+
+  // If deleted item is the currently active exam, switch active to another
+  const active = getSavedExamConfig();
+  if (deletedItem && active.exam_config.exam_name === deletedItem.name) {
+    const nextConfig = filtered[0]?.payload || DEFAULT_EXAM_CONFIG;
+    saveExamConfig(nextConfig);
+  }
+
   return filtered;
 }
 
