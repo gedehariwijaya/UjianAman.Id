@@ -15,7 +15,9 @@ import {
   KeyRound,
   FileCode,
   Sparkles,
-  RefreshCw
+  RefreshCw,
+  Fingerprint,
+  ShieldAlert
 } from 'lucide-react';
 import { ExamPayload } from '../types';
 import { saveExamConfig } from '../utils/proctorSync';
@@ -606,6 +608,55 @@ export const ExamConfigurator: React.FC<ExamConfiguratorProps> = ({
                   }
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono font-bold text-emerald-400 focus:border-emerald-500 outline-none text-center tracking-widest"
                 />
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Protokol Darurat & Panic Combo */}
+          <div className="bg-slate-900/90 rounded-2xl border border-slate-800 p-5 sm:p-6 shadow-md space-y-4">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                <Fingerprint className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm sm:text-base font-bold text-white">
+                  4. Protokol Akses Darurat & Panic Combo
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Mekanisme pemulihan sesi terkunci & force exit aman bagi pengawas
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Master PIN Dinamis (Rotasi 90s)</span>
+                </div>
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Tersedia 6-digit PIN dinamis di Dashboard Pengawas yang diperbarui berkala untuk membuka layar siswa terkunci melalui tombol <strong>"Buka Akses Darurat"</strong>.
+                </p>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+                <div className="flex items-center gap-2 text-indigo-400 font-bold">
+                  <KeyRound className="w-4 h-4" />
+                  <span>Reset Sesi Spesifik NIS Siswa</span>
+                </div>
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Pengawas dapat menerbitkan Token Pemulihan khusus per NIS (<code className="text-indigo-300 font-mono">REC-XXXX-XXXX</code>) agar siswa bisa <strong>resume ujian dari titik terakhir tanpa kehilangan lembar jawaban</strong>.
+                </p>
+              </div>
+
+              <div className="sm:col-span-2 p-3.5 rounded-xl bg-rose-950/20 border border-rose-800/40 text-slate-300 space-y-1.5">
+                <div className="flex items-center gap-2 text-rose-400 font-bold">
+                  <Fingerprint className="w-4 h-4" />
+                  <span>Mekanisme Force Exit "Panic Combo"</span>
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Karena tombol Home / Back diblokir, kombinasi <strong>tekan & tahan 3 jari selama 5 detik</strong> di area pojok atas layar memicu dialog verifikasi PIN pengawas untuk keluar dari peramban secara aman tanpa membekukan atau merusak perangkat siswa.
+                </p>
               </div>
             </div>
           </div>

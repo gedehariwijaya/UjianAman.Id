@@ -38,7 +38,7 @@ export interface StudentSession {
   studentName: string;
   studentNis: string;
   examId: string;
-  status: 'active' | 'warning' | 'blocked' | 'submitted';
+  status: 'active' | 'warning' | 'blocked' | 'submitted' | 'safe_exited';
   device: string;
   os: string;
   browser: string;
@@ -48,6 +48,26 @@ export interface StudentSession {
   lastHeartbeat: number;
   joinedAt: number;
   recentViolations: StudentViolationRecord[];
+  safeExitReason?: string;
+}
+
+export interface EmergencyRecoveryToken {
+  id: string;
+  tokenCode: string; // e.g. "REC-8492-X9"
+  studentNis: string;
+  studentName: string;
+  createdAt: number;
+  expiresAt: number;
+  used: boolean;
+  usedAt?: number;
+  reason?: string;
+}
+
+export interface DynamicMasterPin {
+  pin: string; // 6 digits e.g. "729410"
+  generatedAt: number;
+  expiresAt: number;
+  previousPin?: string;
 }
 
 export interface ProctorLog {
