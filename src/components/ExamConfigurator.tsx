@@ -21,7 +21,8 @@ import {
   Fingerprint,
   Monitor,
   Radio,
-  FileText
+  FileText,
+  Cloud
 } from 'lucide-react';
 import { ExamPayload, SavedExamItem } from '../types';
 import { 
@@ -31,6 +32,12 @@ import {
   deleteExamFromList,
   subscribeToSyncMessages
 } from '../utils/proctorSync';
+import {
+  cloudSaveExam,
+  cloudDeleteExam,
+  subscribeToCloudExams,
+  initializeFirestoreExamsIfNeeded
+} from '../utils/firebaseSync';
 
 interface ExamConfiguratorProps {
   config: ExamPayload;
@@ -71,29 +78,27 @@ export const ExamConfigurator: React.FC<ExamConfiguratorProps> = ({
   const [editingExamId, setEditingExamId] = useState<string | null>(null);
   const [saveSuccessBanner, setSaveSuccessBanner] = useState(false);
   const [activePreset, setActivePreset] = useState<'strict' | 'zero' | 'practice'>('strict');
+  const [isCloudSaving, setIsCloudSaving] = useState(false);
 
-  // Keep saved exams list synced across components & tabs
+  // Initialize and subscribe to real-time Firestore database
   useEffect(() => {
-    const updateList = () => {
-      setSavedExams(getSavedExamList());
-    };
+    // Seed default exams if Firestore collection is fresh
+    initializeFirestoreExamsIfNeeded();
 
-    const unsub = subscribeToSyncMessages((msg) => {
-      if (msg.type === 'EXAM_LIST_UPDATED' || msg.type === 'CONFIG_UPDATED') {
-        updateList();
+    // Subscribe to real-time cloud changes from all devices & phones
+    const unsubCloud = subscribeToCloudExams((cloudList) => {
+      setSavedExams(cloudList);
+    });
+
+    const unsubLocal = subscribeToSyncMessages((msg) => {
+      if (msg.type === 'EXAM_LIST_UPDATED') {
+        setSavedExams(msg.list);
       }
     });
 
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'ujianaman_saved_exams_list') {
-        updateList();
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-
     return () => {
-      unsub();
-      window.removeEventListener('storage', handleStorage);
+      unsubCloud();
+      unsubLocal();
     };
   }, []);
 
@@ -125,7 +130,7 @@ export const ExamConfigurator: React.FC<ExamConfiguratorProps> = ({
   };
 
   // Main Action: "Simpan & Terbitkan Asesmen"
-  const handleSaveAndPublish = (e: React.FormEvent) => {
+  const handleSaveAndPublish = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!examName.trim()) {
@@ -158,15 +163,18 @@ export const ExamConfigurator: React.FC<ExamConfiguratorProps> = ({
       },
     };
 
-    // Save to list and set as active config
-    saveExamToList(newPayload, editingExamId || undefined);
-    setConfig(newPayload);
-    saveExamConfig(newPayload);
-
-    // Refresh list
-    setSavedExams(getSavedExamList());
-    setSaveSuccessBanner(true);
-    setEditingExamId(null);
+    // Save to Firestore cloud database (and local fallback)
+    setIsCloudSaving(true);
+    try {
+      await cloudSaveExam(newPayload, editingExamId || undefined);
+      setConfig(newPayload);
+      setSaveSuccessBanner(true);
+      setEditingExamId(null);
+    } catch (err) {
+      console.error('Error saving exam:', err);
+    } finally {
+      setIsCloudSaving(false);
+    }
 
     // Auto-scroll or keep view responsive
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -194,16 +202,17 @@ export const ExamConfigurator: React.FC<ExamConfiguratorProps> = ({
   };
 
   // Activate directly
-  const handleActivateExam = (exam: SavedExamItem) => {
+  const handleActivateExam = async (exam: SavedExamItem) => {
     setConfig(exam.payload);
     saveExamConfig(exam.payload);
+    await cloudSaveExam(exam.payload, exam.id);
     alert(`Ujian "${exam.name}" sekarang aktif sebagai ujian utama!`);
   };
 
   // Delete an exam
-  const handleDeleteExam = (id: string, name: string) => {
-    if (confirm(`Hapus ujian "${name}" dari daftar?`)) {
-      const nextList = deleteExamFromList(id);
+  const handleDeleteExam = async (id: string, name: string) => {
+    if (confirm(`Hapus ujian "${name}" dari database cloud?`)) {
+      const nextList = await cloudDeleteExam(id);
       setSavedExams(nextList);
     }
   };
@@ -547,23 +556,27 @@ export const ExamConfigurator: React.FC<ExamConfiguratorProps> = ({
           <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900 to-indigo-950/40 border-2 border-emerald-500/50 shadow-xl space-y-3">
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2 text-emerald-400 font-bold">
-                <Save className="w-4 h-4" />
-                <span>Siap Diterbitkan ke Siswa</span>
+                <Cloud className="w-4 h-4 text-emerald-400" />
+                <span>Sinkronisasi Cloud Firebase Aktif</span>
               </div>
-              <span className="text-slate-400">Tersimpan Otomatis ke Database Lokal</span>
+              <span className="text-slate-400 font-mono text-[11px] flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                HP Siswa Real-time
+              </span>
             </div>
 
             <button
               id="btn-save-and-publish"
               type="submit"
-              className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm shadow-xl shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
+              disabled={isCloudSaving}
+              className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm shadow-xl shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 active:scale-[0.99] disabled:opacity-60 cursor-pointer"
             >
               <Save className="w-5 h-5" />
-              <span>Simpan & Terbitkan Asesmen</span>
+              <span>{isCloudSaving ? 'Menyinkron ke Cloud Firebase...' : 'Simpan & Terbitkan Asesmen ke Cloud'}</span>
             </button>
 
             <p className="text-[11px] text-slate-400 text-center">
-              Setelah diklik, ujian langsung muncul di menu pilihan Asesmen Siswa tanpa perlu membagikan/mengimpor file JSON.
+              Setelah diklik, ujian langsung tersimpan ke Database Cloud Firebase dan otomatis muncul di layar HP setiap siswa secara real-time.
             </p>
           </div>
         </form>

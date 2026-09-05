@@ -25,7 +25,8 @@ import {
   AlertTriangle,
   ArrowRight,
   FileText,
-  RefreshCw
+  RefreshCw,
+  Cloud
 } from 'lucide-react';
 import { ExamPayload, StudentSession, StudentViolationRecord, ProctorLog, EmergencyRecoveryToken, SavedExamItem } from '../types';
 import { playWarningBeep, playBlockAlarm, playChimeAlert } from '../utils/audioAlerts';
@@ -38,6 +39,14 @@ import {
   getSavedExamList,
   getSavedExamConfig
 } from '../utils/proctorSync';
+import {
+  subscribeToCloudExams,
+  subscribeToCloudActiveConfig,
+  cloudSyncStudentSession,
+  cloudLogViolation,
+  cloudRedeemRecoveryToken,
+  subscribeToCloudDynamicPin
+} from '../utils/firebaseSync';
 
 interface SecurePlayerProps {
   config: ExamPayload;
@@ -113,10 +122,40 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
     syncExams(undefined, config);
   }, [config, syncExams]);
 
-  // Keep available exams and selected exam updated in real-time
+  // Keep available exams and selected exam updated in real-time from Firestore Cloud
   useEffect(() => {
     syncExams();
 
+    // 1. Listen to real-time updates from Firestore Database (works across phones and any network)
+    const unsubCloudExams = subscribeToCloudExams((cloudList) => {
+      setAvailableExams(cloudList);
+      setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      setSelectedExamId((prevSelectedId) => {
+        const found = cloudList.find((e) => e.id === prevSelectedId);
+        if (found) {
+          setActiveConfig(found.payload);
+          setEnteredPin(found.payload.exam_config.token_settings.access_pin || '');
+          return found.id;
+        } else if (cloudList.length > 0) {
+          setActiveConfig(cloudList[0].payload);
+          setEnteredPin(cloudList[0].payload.exam_config.token_settings.access_pin || '');
+          return cloudList[0].id;
+        }
+        return prevSelectedId;
+      });
+    });
+
+    const unsubCloudActive = subscribeToCloudActiveConfig((activePayload) => {
+      setActiveConfig(activePayload);
+      setEnteredPin(activePayload.exam_config.token_settings.access_pin || '');
+      setLastSyncTime(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    });
+
+    const unsubCloudPin = subscribeToCloudDynamicPin(() => {
+      // Keep master pin fresh
+    });
+
+    // 2. Broadcast and local fallback listeners
     const unsub = subscribeToSyncMessages((msg) => {
       if (msg.type === 'CONFIG_UPDATED') {
         syncExams(undefined, msg.config);
@@ -139,6 +178,9 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
     document.addEventListener('visibilitychange', handleFocus);
 
     return () => {
+      unsubCloudExams();
+      unsubCloudActive();
+      unsubCloudPin();
       unsub();
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('focus', handleFocus);
@@ -243,15 +285,21 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
     };
   };
 
-  // Broadcast student heartbeat
+  // Broadcast and sync student heartbeat to cloud
   useEffect(() => {
     if (phase === 'lobby') return;
 
+    // Send initial session
+    const currentSession = getSessionObject();
+    cloudSyncStudentSession(currentSession);
+
     const interval = setInterval(() => {
+      const sess = getSessionObject();
       broadcastMessage({
         type: 'STUDENT_HEARTBEAT',
-        session: getSessionObject(),
+        session: sess,
       });
+      cloudSyncStudentSession(sess);
     }, 5000);
 
     return () => clearInterval(interval);
@@ -322,19 +370,23 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
       if (security.action_on_exceed === 'LOCK_PERMANENTLY') {
         setPhase('blocked_permanent');
         playBlockAlarm();
+        const blockedSession = getSessionObject('blocked_permanent', nextViolations, 0);
         broadcastMessage({
           type: 'STUDENT_VIOLATION',
           log,
-          session: getSessionObject('blocked_permanent', nextViolations, 0),
+          session: blockedSession,
         });
+        cloudLogViolation(log, blockedSession);
         return;
       } else if (security.action_on_exceed === 'AUTO_SUBMIT') {
         setPhase('finished');
+        const finishedSession = getSessionObject('finished', nextViolations, 0);
         broadcastMessage({
           type: 'STUDENT_VIOLATION',
           log,
-          session: getSessionObject('finished', nextViolations, 0),
+          session: finishedSession,
         });
+        cloudLogViolation(log, finishedSession);
         return;
       }
     }
@@ -344,11 +396,13 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
     setPenaltySeconds(security.violation_penalty_seconds || 10);
     setPhase('warning_penalty');
 
+    const warningSession = getSessionObject('warning_penalty', nextViolations, security.violation_penalty_seconds || 10);
     broadcastMessage({
       type: 'STUDENT_VIOLATION',
       log,
-      session: getSessionObject('warning_penalty', nextViolations, security.violation_penalty_seconds || 10),
+      session: warningSession,
     });
+    cloudLogViolation(log, warningSession);
   };
 
   // Real-world Browser Hooks: Fullscreen, Visibility, Window Blur, Window Resize (Split-Screen)
@@ -489,7 +543,7 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
   // ---------------------------------------------------------------------------
   // FEATURE 1: EMERGENCY ACCESS / TOKEN PEMULIHAN HANDLER
   // ---------------------------------------------------------------------------
-  const handleVerifyEmergencyUnlock = () => {
+  const handleVerifyEmergencyUnlock = async () => {
     setEmergencyError('');
     setEmergencySuccess('');
 
@@ -519,8 +573,8 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
         setEmergencyError('6-Digit PIN Dinamis Pengawas salah atau sudah kadaluarsa! Periksa layar dashboard pengawas.');
       }
     } else {
-      // Validate NIS-specific recovery token
-      const result = validateAndRedeemRecoveryToken(emergencyTokenInput, studentNis);
+      // Validate NIS-specific recovery token with Firestore Cloud & local fallback
+      const result = await cloudRedeemRecoveryToken(emergencyTokenInput, studentNis);
       if (result.valid) {
         setEmergencySuccess('Token Pemulihan Valid! Sesi ujian Anda telah dipulihkan.');
         playChimeAlert();
@@ -746,15 +800,16 @@ export const SecurePlayer: React.FC<SecurePlayerProps> = ({ config, onExitPlayer
 
                   <div className="flex items-center gap-2">
                     <span className="inline-flex items-center gap-1.5 text-[10px] text-emerald-400 bg-emerald-950/80 px-2.5 py-1 rounded-full border border-emerald-800/80 font-mono">
+                      <Cloud className="w-3.5 h-3.5 text-emerald-400" />
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                      {availableExams.length} Mata Pelajaran Siap
+                      {availableExams.length} Mata Pelajaran Cloud
                     </span>
 
                     <button
                       type="button"
                       onClick={handleManualRefresh}
                       disabled={isRefreshing}
-                      title="Segarkan daftar ujian dan data terkini"
+                      title="Segarkan daftar ujian dan data terkini dari Firebase Cloud"
                       className="flex items-center gap-1.5 text-[11px] text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-lg border border-slate-700 transition active:scale-95 disabled:opacity-50 cursor-pointer"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-emerald-400' : 'text-slate-400'}`} />

@@ -355,6 +355,17 @@ export function getDynamicMasterPin(): DynamicMasterPin {
   return regenerateDynamicMasterPin();
 }
 
+export function saveDynamicMasterPin(pinData: DynamicMasterPin) {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(STORAGE_DYNAMIC_PIN_KEY, JSON.stringify(pinData));
+      broadcastMessage({ type: 'DYNAMIC_PIN_UPDATED', pinData });
+    } catch (e) {
+      console.error('Error saving dynamic pin', e);
+    }
+  }
+}
+
 export function regenerateDynamicMasterPin(previousPin?: string): DynamicMasterPin {
   const newPin = Math.floor(100000 + Math.random() * 900000).toString();
   const now = Date.now();
@@ -365,15 +376,7 @@ export function regenerateDynamicMasterPin(previousPin?: string): DynamicMasterP
     previousPin,
   };
 
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(STORAGE_DYNAMIC_PIN_KEY, JSON.stringify(pinData));
-      broadcastMessage({ type: 'DYNAMIC_PIN_UPDATED', pinData });
-    } catch (e) {
-      console.error('Error saving dynamic pin', e);
-    }
-  }
-
+  saveDynamicMasterPin(pinData);
   return pinData;
 }
 

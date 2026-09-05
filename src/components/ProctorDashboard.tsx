@@ -46,6 +46,13 @@ import {
   saveRecoveryTokens,
   generateStudentRecoveryToken
 } from '../utils/proctorSync';
+import {
+  subscribeToCloudSessions,
+  cloudSyncStudentSession,
+  cloudSaveDynamicPin,
+  cloudSaveRecoveryToken,
+  subscribeToCloudDynamicPin
+} from '../utils/firebaseSync';
 
 interface ProctorDashboardProps {
   config: ExamPayload;
@@ -96,8 +103,18 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
     return () => clearInterval(interval);
   }, [dynamicPinData]);
 
-  // Sync with incoming real-time events
+  // Sync with incoming real-time events and Firestore Cloud Database
   useEffect(() => {
+    // 1. Listen to real-time student sessions across all phones and devices from Firestore
+    const unsubCloudSessions = subscribeToCloudSessions((cloudSessions) => {
+      setSessions(cloudSessions);
+    });
+
+    const unsubCloudPin = subscribeToCloudDynamicPin((pinData) => {
+      setDynamicPinData(pinData);
+    });
+
+    // 2. BroadcastChannel events for immediate local interactions
     const unsub = subscribeToSyncMessages((msg) => {
       if (msg.type === 'STUDENT_JOIN' || msg.type === 'STUDENT_HEARTBEAT') {
         setSessions((prev) => {
@@ -224,7 +241,11 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
       }
     });
 
-    return () => unsub();
+    return () => {
+      unsubCloudSessions();
+      unsubCloudPin();
+      unsub();
+    };
   }, [soundEnabled]);
 
   // Unlock student remotely
@@ -266,6 +287,7 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
   const handleRegeneratePin = () => {
     const newPin = regenerateDynamicMasterPin(dynamicPinData.pin);
     setDynamicPinData(newPin);
+    cloudSaveDynamicPin(newPin);
   };
 
   // Copy Master PIN to clipboard
@@ -301,6 +323,9 @@ export const ProctorDashboard: React.FC<ProctorDashboardProps> = ({ config, onOp
       recoveryStudentName.trim() || 'Siswa Terdaftar',
       recoveryReason
     );
+
+    // Persist to Firebase Cloud so student's phone can redeem immediately
+    cloudSaveRecoveryToken(token);
 
     setJustGeneratedToken(token);
     setRecoveryTokens((prev) => [token, ...prev]);

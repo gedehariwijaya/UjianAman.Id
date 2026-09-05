@@ -1,0 +1,9 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Public read & write for school exam configurations, student sessions, violations, and tokens
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
